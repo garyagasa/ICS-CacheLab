@@ -58,8 +58,63 @@ static void usage(const char *prog)
  */
 static void access_cache(uint64_t addr)
 {
-    (void)addr;
-    (void)tick;
+    uint64_t set, tag;
+    int s_b = s + b;
+    int i;
+    int victim = 0;
+    uint64_t oldest;
+    line_t *lines;
+
+    /* Extract the set index without shifting by 64 when s or b is 0. */
+    if (s == 0) {
+        set = 0;
+    } else {
+        set = (addr >> b) & (((uint64_t)1 << s) - 1);
+    }
+
+    /* Tag is everything above the set index bits. When s + b == 64 the
+       whole address is set/offset, so the tag is zero. */
+    tag = (s_b >= 64) ? 0 : (addr >> s_b);
+
+    lines = cache + (size_t)set * E;
+
+    /* Look for a hit. */
+    for (i = 0; i < E; i++) {
+        if (lines[i].valid && lines[i].tag == tag) {
+            hits++;
+            lines[i].last_used = tick++;
+            if (verbose)
+                printf(" hit");
+            return;
+        }
+    }
+
+    /* Miss: find an empty line if there is one, otherwise the LRU line. */
+    misses++;
+    oldest = UINT64_MAX;
+    victim = -1;
+    for (i = 0; i < E; i++) {
+        if (!lines[i].valid) {
+            victim = i;
+            break;
+        }
+        if (lines[i].last_used < oldest) {
+            oldest = lines[i].last_used;
+            victim = i;
+        }
+    }
+
+    if (victim >= 0 && lines[victim].valid) {
+        evictions++;
+        if (verbose)
+            printf(" miss eviction");
+    } else if (verbose) {
+        printf(" miss");
+    }
+
+    lines[victim].valid = 1;
+    lines[victim].tag = tag;
+    lines[victim].last_used = tick++;
 }
 
 /* replay - run every data access in the trace through the cache */
